@@ -1,18 +1,25 @@
-// src/services/geminiService.ts
+// services/geminiService.ts
 import { GoogleGenAI, Type } from "@google/genai";
 import type { LessonInput, LessonPlan } from "../types";
 
 /**
- * Vite exposes env vars only via import.meta.env and only if prefixed with VITE_
- * -> Set VITE_GEMINI_API_KEY in Vercel Environment Variables
+ * Vite only exposes env vars starting with VITE_
+ * Set this on Vercel: Settings → Environment Variables → VITE_GEMINI_API_KEY
  */
 const API_KEY = (import.meta as any).env?.VITE_GEMINI_API_KEY as string | undefined;
 
-/** Friendly, non-technical error for UI */
+/** Friendly errors for UI */
 export class GeminiConfigError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "GeminiConfigError";
+  }
+}
+
+export class GeminiRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GeminiRequestError";
   }
 }
 
@@ -24,61 +31,70 @@ export class GeminiResponseError extends Error {
 }
 
 function getClient(): GoogleGenAI {
-  if (!API_KEY || !API_KEY.trim()) {
-    // Do not crash with cryptic SDK error; throw a clear message
+  const key = (API_KEY ?? "").trim();
+  if (!key) {
     throw new GeminiConfigError(
-      "Thiếu API Key Gemini. Hãy cấu hình biến môi trường VITE_GEMINI_API_KEY trên Vercel (Settings → Environment Variables) và redeploy."
+      "Thiếu API Key Gemini. Hãy cấu hình biến môi trường VITE_GEMINI_API_KEY trên Vercel và redeploy."
     );
   }
-  return new GoogleGenAI({ apiKey: API_KEY.trim() });
+  return new GoogleGenAI({ apiKey: key });
 }
 
-/** Remove ```json fences and extract the first valid JSON object if extra text exists */
+/** Promise timeout to avoid hanging requests */
+function withTimeout<T>(promise: Promise<T>, ms = 60000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("Quá thời gian phản hồi từ AI. Vui lòng thử lại.")), ms);
+    promise
+      .then((v) => {
+        clearTimeout(timer);
+        resolve(v);
+      })
+      .catch((e) => {
+        clearTimeout(timer);
+        reject(e);
+      });
+  });
+}
+
+/** Remove ```json fences and extract JSON object safely */
 function extractJsonObject(raw: string): string {
   const text = raw.trim();
 
-  // Remove markdown fences if present
+  // Remove code fences if present
   const unfenced = text
     .replace(/^```(?:json)?/i, "")
     .replace(/```$/i, "")
     .trim();
 
-  // If it's already a pure JSON object
+  // If already JSON object
   if (unfenced.startsWith("{") && unfenced.endsWith("}")) return unfenced;
 
-  // Otherwise, try to find the first {...} block
-  const firstBrace = unfenced.indexOf("{");
-  const lastBrace = unfenced.lastIndexOf("}");
-  if (firstBrace >= 0 && lastBrace > firstBrace) {
-    return unfenced.slice(firstBrace, lastBrace + 1);
-  }
+  // Otherwise try to locate the first {...}
+  const first = unfenced.indexOf("{");
+  const last = unfenced.lastIndexOf("}");
+  if (first >= 0 && last > first) return unfenced.slice(first, last + 1);
 
-  // Give up with explicit error
-  throw new GeminiResponseError(
-    "AI trả về dữ liệu không đúng định dạng JSON. Hãy thử lại hoặc đổi prompt ngắn hơn."
-  );
+  throw new GeminiResponseError("AI không trả về JSON hợp lệ. Vui lòng thử lại.");
 }
 
-/** Basic shape hardening so downstream UI won't crash */
+/** Normalize output so UI won't crash */
 function normalizeLessonPlan(parsed: any, input: LessonInput): LessonPlan {
-  const safe = parsed ?? {};
+  const p = parsed ?? {};
 
-  const lessonTitle = String(safe.lessonTitle ?? input.lessonTitle ?? "").trim();
-  const subject = String(safe.subject ?? input.subject ?? "").trim();
-  const duration = String(safe.duration ?? input.duration ?? "").trim();
+  const lessonTitle = String(p.lessonTitle ?? input.lessonTitle ?? "").trim();
+  const subject = String(p.subject ?? input.subject ?? "").trim();
+  const duration = String(p.duration ?? input.duration ?? "").trim();
 
   if (!lessonTitle || !subject || !duration) {
-    throw new GeminiResponseError("Thiếu trường bắt buộc trong JSON (lessonTitle/subject/duration).");
+    throw new GeminiResponseError("JSON thiếu trường bắt buộc (lessonTitle/subject/duration).");
   }
 
-  // Ensure objects/arrays exist
-  const objectives = safe.objectives ?? {};
-  const preparation = safe.preparation ?? {};
-  const activities = Array.isArray(safe.activities) ? safe.activities : [];
+  const objectives = p.objectives ?? {};
+  const preparation = p.preparation ?? {};
+  const activitiesArr = Array.isArray(p.activities) ? p.activities : [];
 
-  // Minimal defaults to avoid undefined in UI
-  const normalized: LessonPlan = {
-    ...safe,
+  const plan: LessonPlan = {
+    ...p,
     lessonTitle,
     subject,
     duration,
@@ -92,7 +108,7 @@ function normalizeLessonPlan(parsed: any, input: LessonInput): LessonPlan {
       teacher: Array.isArray(preparation.teacher) ? preparation.teacher : [],
       students: Array.isArray(preparation.students) ? preparation.students : [],
     },
-    activities: activities.map((a: any) => ({
+    activities: activitiesArr.map((a: any) => ({
       phase: String(a?.phase ?? ""),
       objective: String(a?.objective ?? ""),
       teacherActions: Array.isArray(a?.teacherActions) ? a.teacherActions : [],
@@ -102,37 +118,24 @@ function normalizeLessonPlan(parsed: any, input: LessonInput): LessonPlan {
         description: String(a?.digitalIntegration?.description ?? ""),
       },
     })),
-    adjustment: String(safe.adjustment ?? ""),
-    // App-specific fields:
+    adjustment: String(p.adjustment ?? ""),
+
+    // App extra fields
     id: crypto.randomUUID(),
     grade: input.grade,
     digitalCompetencies: input.digitalCompetencies,
     createdAt: Date.now(),
   };
 
-  return normalized;
+  return plan;
 }
 
-/** Promise timeout to avoid hanging UI */
-function withTimeout<T>(promise: Promise<T>, ms = 60000): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = setTimeout(() => reject(new Error("Quá thời gian phản hồi từ AI. Vui lòng thử lại.")), ms);
-    promise
-      .then((v) => {
-        clearTimeout(t);
-        resolve(v);
-      })
-      .catch((e) => {
-        clearTimeout(t);
-        reject(e);
-      });
-  });
-}
-
+/** Main function used by your UI */
 export async function generateLessonPlan(input: LessonInput): Promise<LessonPlan> {
-  const ai = getClient();
+  try {
+    const ai = getClient();
 
-  const systemInstruction = `
+    const systemInstruction = `
 Bạn là một Giáo viên Tiểu học ưu tú với 28 năm kinh nghiệm và là chuyên gia chuyển đổi số giáo dục hàng đầu.
 
 NHIỆM VỤ: Tích hợp Năng lực số (NLS) vào Kế hoạch bài dạy (KHBD) theo chuẩn Công văn 2345 và Công văn 3456/BGDĐT-GDPT, bám sát Khung NLS học sinh tiểu học mới nhất (6/2024).
@@ -147,9 +150,12 @@ QUY TẮC CẦN TUÂN THỦ:
 - Trong mỗi bước, phải ghi rõ GV chuyển giao nhiệm vụ gì, HS thao tác thiết bị/phần mềm nào cụ thể.
 
 PHONG CÁCH: Ngôn ngữ sư phạm chuẩn mực, hiện đại, truyền cảm hứng.
-  `.trim();
 
-  const prompt = `
+YÊU CẦU ĐẦU RA:
+- Chỉ trả về JSON (không kèm markdown, không kèm giải thích).
+    `.trim();
+
+    const prompt = `
 Thiết kế/Số hóa bài dạy Platinum v5.5:
 - Môn: ${input.subject} | Khối: ${input.grade} | Tên bài: ${input.lessonTitle}
 - Thời lượng: ${input.duration}
@@ -160,88 +166,96 @@ ${
     : "- Soạn mới hoàn toàn bám sát CV 2345 và Khung NLS 6/2024."
 }
 
-YÊU CẦU: Trả về JSON chính xác theo schema. Không kèm giải thích ngoài JSON.
-  `.trim();
+YÊU CẦU: Trả về JSON chính xác theo schema. Không kèm nội dung ngoài JSON.
+    `.trim();
 
-  // NOTE: If "gemini-3-pro-preview" is unavailable for your key/region, switch to a stable model name.
-  const modelName = "gemini-2.5-pro"; // bạn có thể đổi lại nếu cần
+    // Use a stable model. If your account supports another model name, you can change it.
+    const model = "gemini-2.5-pro";
 
-  const response = await withTimeout(
-    ai.models.generateContent({
-      model: modelName,
-      contents: prompt,
-      config: {
-        systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          reminder: "Trả về JSON đúng schema, không kèm markdown/code fence.",
-          type: Type.OBJECT,
-          properties: {
-            lessonTitle: { type: Type.STRING },
-            subject: { type: Type.STRING },
-            duration: { type: Type.STRING },
-            objectives: {
-              type: Type.OBJECT,
-              properties: {
-                specificCapacities: { type: Type.ARRAY, items: { type: Type.STRING } },
-                generalCapacities: { type: Type.ARRAY, items: { type: Type.STRING } },
-                qualities: { type: Type.ARRAY, items: { type: Type.STRING } },
-                digitalInterpretation: { type: Type.STRING },
-              },
-              required: ["specificCapacities", "generalCapacities", "qualities", "digitalInterpretation"],
-            },
-            preparation: {
-              type: Type.OBJECT,
-              properties: {
-                teacher: { type: Type.ARRAY, items: { type: Type.STRING } },
-                students: { type: Type.ARRAY, items: { type: Type.STRING } },
-              },
-              required: ["teacher", "students"],
-            },
-            activities: {
-              type: Type.ARRAY,
-              items: {
+    const response = await withTimeout(
+      ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction,
+          responseMimeType: "application/json",
+          // IMPORTANT: schema must NOT contain unknown fields (like "reminder")
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              lessonTitle: { type: Type.STRING },
+              subject: { type: Type.STRING },
+              duration: { type: Type.STRING },
+              objectives: {
                 type: Type.OBJECT,
                 properties: {
-                  phase: { type: Type.STRING },
-                  objective: { type: Type.STRING },
-                  teacherActions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  studentActions: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  digitalIntegration: {
-                    type: Type.OBJECT,
-                    properties: {
-                      toolName: { type: Type.STRING },
-                      description: { type: Type.STRING },
-                    },
-                    required: ["toolName", "description"],
-                  },
+                  specificCapacities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  generalCapacities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  qualities: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  digitalInterpretation: { type: Type.STRING },
                 },
-                required: ["phase", "objective", "teacherActions", "studentActions", "digitalIntegration"],
+                required: ["specificCapacities", "generalCapacities", "qualities", "digitalInterpretation"],
               },
+              preparation: {
+                type: Type.OBJECT,
+                properties: {
+                  teacher: { type: Type.ARRAY, items: { type: Type.STRING } },
+                  students: { type: Type.ARRAY, items: { type: Type.STRING } },
+                },
+                required: ["teacher", "students"],
+              },
+              activities: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    phase: { type: Type.STRING },
+                    objective: { type: Type.STRING },
+                    teacherActions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    studentActions: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    digitalIntegration: {
+                      type: Type.OBJECT,
+                      properties: {
+                        toolName: { type: Type.STRING },
+                        description: { type: Type.STRING },
+                      },
+                      required: ["toolName", "description"],
+                    },
+                  },
+                  required: ["phase", "objective", "teacherActions", "studentActions", "digitalIntegration"],
+                },
+              },
+              adjustment: { type: Type.STRING },
             },
-            adjustment: { type: Type.STRING },
+            required: ["lessonTitle", "subject", "duration", "objectives", "preparation", "activities", "adjustment"],
           },
-          required: ["lessonTitle", "subject", "duration", "objectives", "preparation", "activities", "adjustment"],
         },
-      },
-    }),
-    60000
-  );
+      }),
+      60000
+    );
 
-  const raw = String((response as any)?.text ?? "").trim();
-  if (!raw) {
-    throw new GeminiResponseError("AI không trả về nội dung. Vui lòng thử lại.");
+    const raw = String((response as any)?.text ?? "").trim();
+    if (!raw) {
+      throw new GeminiResponseError("AI không trả về nội dung. Vui lòng thử lại.");
+    }
+
+    const jsonStr = extractJsonObject(raw);
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(jsonStr);
+    } catch {
+      throw new GeminiResponseError("AI trả về JSON không hợp lệ. Vui lòng thử lại.");
+    }
+
+    return normalizeLessonPlan(parsed, input);
+  } catch (err: any) {
+    // Re-throw with a clean message for your UI alert
+    if (err?.name === "GeminiConfigError") throw err;
+    if (err?.name === "GeminiResponseError") throw err;
+    if (err?.message?.includes("status of 400")) {
+      throw new GeminiRequestError("Yêu cầu gửi lên AI bị từ chối (400). Vui lòng thử lại hoặc rút gọn nội dung.");
+    }
+    throw new GeminiRequestError(err?.message || "Đã có lỗi xảy ra khi tạo bài dạy. Vui lòng thử lại.");
   }
-
-  const jsonStr = extractJsonObject(raw);
-
-  let parsed: any;
-  try {
-    parsed = JSON.parse(jsonStr);
-  } catch (e) {
-    // Helpful debug hint without leaking key
-    throw new GeminiResponseError("Không parse được JSON từ AI. Vui lòng thử lại (hoặc giảm độ dài nội dung gốc).");
-  }
-
-  return normalizeLessonPlan(parsed, input);
 }
