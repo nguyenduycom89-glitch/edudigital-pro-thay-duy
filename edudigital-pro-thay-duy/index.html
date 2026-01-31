@@ -1,44 +1,63 @@
-
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="EduDigital Pro | Thầy Nguyễn Đức Duy" />
     <title>EduDigital Pro | Thầy Nguyễn Đức Duy</title>
+
+    <!-- Font -->
+    <link
+      href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+
+    <!-- Tailwind via CDN (works on Vercel, but recommended to install Tailwind for production) -->
     <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+
+    <!-- App styles (keep your custom CSS here)
+         NOTE: Do NOT link /index.css because it caused 404 on Vercel.
+         If you have src/index.css, import it inside src/main.tsx instead. -->
     <style>
-        body { font-family: 'Plus Jakarta Sans', sans-serif; }
-        .bg-vibrant-gradient {
-            background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      body {
+        font-family: "Plus Jakarta Sans", sans-serif;
+      }
+      .bg-vibrant-gradient {
+        background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      }
+      .glass-card {
+        background: rgba(255, 255, 255, 0.9);
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+      }
+      @media print {
+        .no-print {
+          display: none !important;
         }
-        .glass-card {
-            background: rgba(255, 255, 255, 0.9);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+        .print-only {
+          display: block !important;
         }
-        @media print {
-            .no-print { display: none !important; }
-            .print-only { display: block !important; }
-            table { width: 100% !important; border-collapse: collapse !important; }
-            th, td { border: 1px solid #000 !important; padding: 8px !important; }
+        table {
+          width: 100% !important;
+          border-collapse: collapse !important;
         }
+        th,
+        td {
+          border: 1px solid #000 !important;
+          padding: 8px !important;
+        }
+      }
     </style>
-<script type="importmap">
-{
-  "imports": {
-    "react/": "https://esm.sh/react@^19.2.3/",
-    "react": "https://esm.sh/react@^19.2.3",
-    "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
-    "mammoth": "https://esm.sh/mammoth@1.6.0"
-  }
-}
-</script>
-<link rel="stylesheet" href="/index.css">
-</head>
-<body class="bg-slate-50 text-slate-900">
+
+    <!-- Optional: favicon (avoid 404). Put favicon.ico in /public -->
+    <link rel="icon" href="/favicon.ico" />
+  </head>
+
+  <body class="bg-slate-50 text-slate-900">
     <div id="root"></div>
-<script type="module" src="/index.tsx"></script>
-</body>
+
+    <!-- Vite entry: change to your real entry file -->
+    <!-- Most Vite React templates use /src/main.tsx -->
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
 </html>
